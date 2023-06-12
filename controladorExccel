@@ -1,0 +1,315 @@
+<?php
+
+namespace App\Http\Livewire;
+
+use Livewire\Component;
+use Illuminate\Http\Request;
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use \Carbon\Carbon;
+use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Pagination\Paginator;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\Log;
+use App\config\excel;
+use Illuminate\Support\Facades\Http;
+use Office365\SharePoint\ListItem;
+use Microsoft\Graph\Graph;
+use Microsoft\Graph\Model;
+use Microsoft\Graph\Model\DriveItem;
+use Microsoft\Graph\Model\WoorkbookRange;
+use Microsoft\Graph\Model\Date;
+use GuzzleHttp\guzzle;
+use GuzzleHttp\Client;
+use TheNetworg\OAuth2\Client\Provider\Azure;
+class Pantalla extends Component
+{
+    public function render(){   
+        
+        Carbon::setLocale('es');
+        setlocale(LC_ALL,"es_ES"); 
+        $date = Carbon::now()->locale('es');
+        
+        $data = $this->readSheetExcel($this->readExcelApi(), 0);
+        
+        //Ordenamos el array de forma aleatoria
+        shuffle($data);
+                
+        /*Pasamos el array a la funcion color, que introducira los colores que correspondan a cada categoria */
+        $data = $this->color($data);
+
+        return view('livewire.pantalla', compact('data'));     
+    }
+
+    /*funcion para paginar los datos */
+    public function paginate($items, $perPage, $page = null, $options = [])
+    {
+        $page = $page ?: (Paginator::resolveCurrentPage() ?: 1);
+        $items = $items instanceof Collection ? $items : Collection::make($items);
+        return new LengthAwarePaginator($items->forPage($page, $perPage), $items->count(), $perPage, $page, $options);
+    }
+
+    /*Funcion para extraer los colores correspondientes de cada categoria */
+    public function color($data){
+        /*Creamos un nuevo array donde introduciremos los datos de la hoja de proyectos junto a su color correspondiente */
+        $newDataArray = array();
+        
+        /*Extraemos los datos de la hoja donde tenemos asociados las categorias junto a sus respectivos colores */
+        $colors = $this->readSheetExcel($this->readExcelApi(), 1);
+        /*Primero recorremos la hoja de proyectos */
+        foreach ($data as $row) {
+            /*Seguidamente recorremos la hoja de los colores */
+            foreach($colors as $color){
+                /*Comparamos las categorias y cuando coincidan en la celda P y Q de la hoja de proyectos le asignamos los colores del header y el body */
+                if($row['E'] == $color['A']){
+                    $row['P'] = $color['B'];
+                    $row['Q'] = $color['C'];
+                }
+            }
+            /*lo añadimos al nuevo array ya con sus colores correspondientes */
+            array_push($newDataArray, $row);
+        }
+        return $newDataArray;
+    }
+
+    /*Funcion para extraer los datos de la hoja que queramos de nuextro excel
+    tendremos que pasarle por parametro:
+        1: La ruta del archivo 
+        2: La hoja del archivo que queremos leer */
+    public function readSheetExcel($file, $numSheet){
+
+        /*Cargamos el documento que nos pasan por parametro */
+        $reader = IOFactory::load($file);  
+        /*Elegimos la hoja que nos pasen por parametro */
+        $reader->setActiveSheetIndex($numSheet);
+
+        /*Pasamos la hoja en array */
+        $data = $reader -> getActiveSheet()->toArray(null, true, true, true);
+
+        /*Borramos la primera linea ya que estan seran las cabeceras de las columnas */
+        unset($data[1]);
+
+        /* retornamos los datos extraidos */
+        return $data;
+    }
+
+    public function readExcelApi(){
+
+        /*recojemos los ids de azure necesarios para iniciar la API */
+        $clientId = env('AZURE_CLIENT_ID');
+        $clientSecret = env('AZURE_CLIENT_SECRET');
+        $tenantId = env('AZURE_TENANT_ID');
+
+        /*Iniciamos un nuevo cliente, creamos la url de login para la obtencion del token*/
+        $guzzle = new \GuzzleHttp\Client();
+        $url = 'https://login.microsoftonline.com/' . $tenantId . '/oauth2/v2.0/token';
+
+        /*cogemos el token de azure */
+        $token = json_decode($guzzle->post($url, [
+            'form_params' => [
+                'client_id' => $clientId,
+                'client_secret' => $clientSecret,
+                'scope' => 'https://graph.microsoft.com/.default',
+                'grant_type' => 'client_credentials',
+            ],
+        ])->getBody()->getContents());
+        $accessToken = $token->access_token;
+        /*con el token ya podemos acceder a graph que es la api que nos permitira hacer peticiones sobre todas nuestras app de microsoft */
+        $graph = new Graph();
+        $graph ->setAccessToken($accessToken);
+        
+        /*Con esta petiicion api saco el archivo xlsx que buscamos */
+        $driveItem = $graph->createRequest('GET', 'https://graph.microsoft.com/v1.0/drives/b!igPcADpgQESm5KzXv6H7emxKJi5Q-iFDo62pYgR06DKHOYx35pRSQ40PWUMnfXcb/list/items/1/driveItem')->setReturnType(DriveItem::class)->execute();
+
+        /*saco sus porpiedades */
+        $properties = $driveItem->getProperties();
+
+        /*si existe el enlace de descarga se lo asignamos a una variable */
+        if (array_key_exists("@microsoft.graph.downloadUrl", $properties))
+        {
+           $downloadUrl = $properties["@microsoft.graph.downloadUrl"];
+        }
+
+        /*obtenemos el contenido del archivo con */
+        $fileContent = file_get_contents($downloadUrl);
+        /*creamos un fichero excel temporal que le asignaremos todos los datos que tenemos en nuestro excel sacado con la api */
+        file_put_contents('excel.xlsx',  $fileContent);
+
+        $file = 'excel.xlsx';
+
+        return $file;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<?php
+
+namespace App\Http\Livewire;
+
+use Livewire\Component;
+use Illuminate\Http\Request;
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use \Carbon\Carbon;
+use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Pagination\Paginator;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\Log;
+class Pantalla extends Component
+{
+    /* variables
+        pantalla: las pantallas que iremos mostrando
+        i: controlara que pantalla mostramos en cada momento
+        sheetSelector: controla que hoja mostramos en cada momento
+        page: controla que pagina de la paginacion de cada hoja
+        lastPage: ultima pagina de la paginacion 
+    */
+    public $screens = ['livewire.pantalla','livewire.hosting','livewire.mtos'];
+    public $screenSelector = 0;
+    public $sheetSelector = 3;
+    public $page = 1;
+    public $lastPage;
+    //public $paginacion = 10;
+
+    public function render(){       
+            
+        /*Iniciamos una nueva fecha con carbon y le indicamos el idioma */
+        Carbon::setLocale('es');
+        setlocale(LC_ALL,"es_ES"); 
+        $date = Carbon::now()->locale('es');
+        /*Indicamos el tipo de fichero que queremos importar y donde se encuentra */
+        $inputFileType = 'Xlsx';
+        $inputFileName = 'C:\laragon\www\eServicesScreen\app\RENOVACIONES-HOSTING-DOMINIOS-2023.xlsx';
+        
+        /**  crear un nuevo reader pasandole el tipo de archivo que queremos  **/
+        $reader = \PhpOffice\PhpSpreadsheet\IOFactory::createReader($inputFileType);
+        
+        //$filterRow = new FirstRowFilter();
+        //$reader->setReadFilter($filterRow);
+
+        /*con este metodo podemos sacar todos los nombres de las hojas que tengamos en nuestro libro de excel*/ 
+        $worksheetNames = $reader->listWorksheetNames($inputFileName);
+
+        /*Recorro todas las hojas */
+        foreach ($worksheetNames as $sheet) {
+            /*Con el if indicaos que si los meses de esas hojas son menores al mes actual que las elimine
+            del array de las hojas, ya que solo queremos mostrar las hojas de este mes y del siguiente */
+            if(substr($sheet, -1) < $date->month){
+                $worksheetNames = array_diff($worksheetNames, array($sheet));
+            };
+            
+        }
+        /* Con este if indicamos que si lastPage tiene un numero(Lo que nos indica que el codigo ya se ha ejecutado al menos una vez y
+        ya sabemos la ultima pagina de la paginacion de nuestra hoja)
+        y que la pagina actual de la paginacion es igual a la ultima, actualizamos j que es la variable con la que estaremos controlando
+        que hoja se situa */
+        if(is_integer($this->lastPage)){
+            if($this->page == $this->lastPage){
+                $this->sheetSelector += 1;
+            }
+        }
+
+        /*Aqui sacamos el numero de elementos (hojas) que tenemos*/
+        $sheets = array_count_values($worksheetNames);
+        
+        /* Indicamos que si nuestra variable sheetSelector ha llegado al final del array de las hojas, que vuelva a valer 0
+        para volver a ver todas las hojas en el array */
+        if($this->sheetSelector == count($sheets)){
+            $this->sheetSelector = 0;
+        }
+
+        /*Aqui sacamos la hoja con la variable sheetSelector anteriormente vista */
+        $sheetname =$worksheetNames[$this->sheetSelector];
+
+        /*
+        Sacamos el mes de la hoja que estamos viendo cortando los dos ultimos digitos que tiene
+        y con carbon pasamos esos numeros de meses en el nombre del mes, lo indicaremos en español con el locate */
+        $mes = Carbon::createFromFormat('m', substr($sheetname, -2))->locale('es')->monthName;
+       
+        /**  si tenemos muchas hojas Aqui elegimos la que queramos introduciendo la variable con el nombre de la hoja  **/
+        $reader->setLoadSheetsOnly($sheetname);
+
+        /**  leemos el fichero y lo pasamos a un objeto spreadsheet **/
+        $spreadsheet = $reader->load($inputFileName);
+
+        /*Lo pasamos a array*/
+        $datas = $spreadsheet -> getActiveSheet()->toArray(null, true, true, true);
+
+        /*borramos la primera fila de nuestro array ya que son los nombres de las columnas */
+        unset($datas[1]);
+
+        /*Recorremos todas columnas de de datos y le indicamos que en la columna C si esta escrito
+        PV/PC/AV borre la fila entera
+        (Esto solo queremos para aplicarlo a las hojas de dominio) */
+        $colum = 2;
+        foreach ($datas as $row) {
+            if ($row['C'] == "PV/PC/AV") {
+                unset($datas[$colum]);
+            };
+            $colum+=1;
+        }
+        
+        /*Si tenemos el lastPage y y la pagina actual es ya la ultima
+        volvemos a poner la pagina de paginacion a 1
+        a i le sumamos 1 (screenSelector es la variable que le pasaremos al array pantalla para  mostrar las pantallas)
+        si aun quedan mas paginas de paginacion le sumamos 1 a page para que la muestre
+        */
+        if(is_integer($this->lastPage)){
+            if($this->page == $this->lastPage){
+                $this->page = 1;
+                $this->screenSelector += 1;
+            }else {   
+                $this->page += 1;
+            }
+
+            /* Si la screenSelector ya ha llegado a 3 (pantalla final del array)
+            volvera a la primera pantalla*/
+            if($this->screenSelector == 3){
+                $this->screenSelector = 0;
+            }
+        }
+        /*
+        Paginamos los datos de la hoja de excel, los parametros pasados son:
+            1: el array que contiene los datos que queremos paginar
+            2: las columnas que que queremos mostrar por pagina
+            3: el numero de la pagina
+        */
+        $data = $this->paginate($datas, 12, $this->page);
+        
+        /*introducimos en la variable lastPage el total de paginaciones que tiene la hoja */
+        $this->lastPage =  $data->lastPage();
+
+        /*indicamos la ruta que tiene que seguir la paginacion */
+        $data->withPath('/eservices');
+        
+        return view($this->screens[$this->screenSelector], compact('data', 'mes'));
+    }
+    /*funcion para paginar los datos */
+    public function paginate($items, $perPage, $page = null, $options = [])
+    {
+        $page = $page ?: (Paginator::resolveCurrentPage() ?: 1);
+        $items = $items instanceof Collection ? $items : Collection::make($items);
+        return new LengthAwarePaginator($items->forPage($page, $perPage), $items->count(), $perPage, $page, $options);
+    }
+}
+
